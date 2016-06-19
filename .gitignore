@@ -1,4 +1,5 @@
 venv/
 static/uploads/
+sampleimgs/
 *.pyc
 *.html
