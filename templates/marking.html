@@ -1,0 +1,1044 @@
+{% extends "base.html" %}
+{% block title %}Marking{% endblock %}
+
+{% block jscript %}
+<script type="text/javascript">
+
+var imgpool;
+var idx = 0;
+
+var canvas, rect, isDown, origX, origY;
+var cstate;
+var undo = [];
+var redo = [];
+
+var cellidx = cellint = 0;
+var cellcolor = "green";
+var tot = fini = 0;
+
+$(document).ready(function(){
+
+    $("#markerswitch").bootstrapSwitch();
+
+    $.notifyDefaults({
+        type: 'success',
+        allow_dismiss: true,
+        animate: {
+            enter: 'animated fadeInRight',
+            exit: 'animated fadeOutRight'
+        },
+        newest_on_top: true,
+        template: '<div data-notify="container" class="col-xs-11 col-sm-3 alert alert-{0}" role="alert" style="width: 200px;">' +
+            '<button type="button" aria-hidden="true" class="close" data-notify="dismiss">×</button>' +
+            '<span data-notify="icon"></span> ' +
+            '<span data-notify="title">{1}</span> ' +
+            '<span data-notify="message">{2}</span>' +
+            '<div class="progress" data-notify="progressbar">' +
+            '<div class="progress-bar progress-bar-{0}" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="width: 0%;"></div>' +
+            '</div>' +
+            '<a href="{3}" target="{4}" data-notify="url"></a>' +
+            '</div>'
+    });
+
+    $("#logoutbtn").on('click', function(){
+        location.href = "/signout";
+    });
+
+    $("#select-new").on("click", function() {
+        $("#newtaskerrmsg").remove();
+        $("#newtaskModal").modal('show');
+    });
+
+    $("#newtaskform").on('submit', function(e) {
+        e.preventDefault(); 
+        $.ajax({
+            url: "{{ url_for('newtask') }}",
+            data: $(this).serialize(),
+            type: 'POST',
+            success: function(r) {
+                var data = JSON.parse(r);
+                if (data['success'] == '1') {
+                    $.getJSON("{{ url_for('gettasklist') }}",
+                        {
+                        }, function(data) {
+                            $("#newtaskModal").modal('hide');
+                            $.notify("Task Created");
+                            $('#select-dropdown .option:not("#select-new")').remove();
+                            $.each(data, function(key, value) {
+                                $("#select-new").before('<div class="select option" data-id=' + key + '>' + value + '</div>');
+                            });
+                            $('.option').not("#select-new").bind("click", select);
+                            collapse();
+                    });
+                } else {
+                    $("#newtaskerrmsg").remove();
+                    $("#newtaskform").before('<div id="newtaskerrmsg" style="margin-bottom:5px; font-size:0.5em; color: red;">failed - try a different name</div>');
+                }
+            }
+        });
+    });
+
+    $('#select-default').click(function(event) {
+        event.stopPropagation();
+        toggle();
+    });
+
+    function toggle() {
+        if ($('#select-dropdown').hasClass('open')) {
+            collapse();
+        } else {
+            expand();
+        }
+    }
+    function expand() {
+        $('#select-dropdown').removeClass('closed').addClass('open');
+
+        options = $('.select');
+
+        options.each(function(index) {
+            var layer = options.length - index;
+            $(this).css("top", 40 * index + "px");
+            //	$(this).css("width", 230);
+            $(this).css("margin-left", 0);
+        });
+    }
+    function collapse() {
+        $('#select-dropdown').removeClass('open').addClass('closed');
+
+        options = $('.select');
+
+        options.each(function(index) {
+            var layer = options.length - index;
+            $(this).css("z-index", layer);
+            $(this).css("top", 2 * Math.min(index, 3) + "px");
+            //	$(this).css("width", 230 - 2 * index);
+            $(this).css("margin-left", 0 + Math.min(index, 3));
+        });
+    }
+
+    $('.option').not("#select-new").bind("click", select);
+
+    function select() {
+        if ($('#select-dropdown').hasClass('open')) {
+            var selection = $(this).text();
+            $('#select-default').text(selection);
+            $('#newimgstid').val($(this).attr('data-id'));
+            collapse();
+            $('#upldbtn').prop('disabled', false);
+
+            var tid = $(this).attr('data-id');
+            $.getJSON("{{ url_for('gettaskinfo') }}",
+                {
+                    tid: tid
+                }, function(data) {
+                    if (data['imgnumttl'] == '0') {
+                        $("#imgpreview").remove();
+                        $("#gdetxt").text("Upload Some Images First");
+                        $("#gdetxt").css("display", "table-cell");
+                        $('#prebtn').prop('disabled', true);
+                        $('#nxtbtn').prop('disabled', true);
+                        $('#svbtn').prop('disabled', true);
+                        $('#modearea').css("visibility", "hidden");
+                        $('.cellbutton').prop('disabled', true);
+                        $("#checkboxintopt input").prop("checked", true);
+                        $("#intoptarea input").prop("disabled", true);
+                    } else {
+                        imgpool = data['imglist'];
+                        idx = 0;
+                        showimg();
+                    }
+            });
+        } else {
+            expand();
+        }
+    }
+
+    collapse();
+
+    $(document).click( function(){
+        collapse();
+        if ($("#modeimage").attr('data-v') == '0')
+            stophighlight();
+    });
+
+    function newimgprogbarSet(p) {
+        $("#newimgprogbar div").attr('aria-valuenow', p);
+        $("#newimgprogbar div").css('width', p + '%');
+        $("#newimgprogbar div").text(p + '%');
+    }
+
+    $("#upldbtn").on('click', function(){
+        $("#newimgprogbar").css('display', 'none');
+        newimgprogbarSet(0);
+        $("#uploadImgsModal").modal('show');
+    });
+
+    $("#newimgs").on('change', function(){
+        var imgArr = $.map($("#newimgs").prop("files"), function(val) { return val.name; });
+        var imgnames = imgArr.join(', ');
+        $("#newimgnames").val(imgnames);
+    });
+
+    $("#uploadimgsform").on('submit', function(e) {
+        e.preventDefault(); 
+        if ($("#newimgs").prop("files").length) {
+            var formData = new FormData($(this)[0]);
+
+            newimgprogbarSet(0);
+            $("#newimgprogbar").css('display', 'block');
+
+            $.ajax({
+                xhr: function() {
+                    var xhr = new window.XMLHttpRequest();
+                    xhr.upload.addEventListener("progress", function(evt) {
+                        if (evt.lengthComputable) {
+                            var percentComplete = evt.loaded / evt.total;
+                            percentComplete = parseInt(percentComplete * 100);
+                            newimgprogbarSet(percentComplete);
+                            //console.log(percentComplete);
+
+                            if (percentComplete === 100) {
+                                // do something
+                                $("#newimgprogbar").css('display', 'none');
+                                newimgprogbarSet(0);
+                            }
+                        }
+                    }, false);
+                    return xhr;
+                },
+                url: "{{ url_for('uploadimgs') }}",
+                data: formData,
+                type: 'POST',
+                contentType: false,
+                processData: false,
+                success: function(r) {
+                    var data = JSON.parse(r);
+                    if (data['success'] == '1') {
+                        // update imgpool
+                        imgpool = data['imglist'];
+                        $("#uploadImgsModal").modal('hide');
+                        $.notify("Images Uploaded");
+                        if (!$("#imgpreview").length) {
+                            idx = 0;
+                            showimg();
+                        }
+                    }
+                }
+            });
+        }
+    });
+
+    function csave() {
+        redo = [];
+        $('#redo').prop('disabled', true);
+        $('#redo').css("background-color", "lightgray");
+        if (canvas.getActiveObject()) {
+            $('#rmv').prop('disabled', false);
+            $('#rmv').css("background-color", "#0275d8");
+        } else {
+            $('#rmv').prop('disabled', true);
+            $('#rmv').css("background-color", "lightgray");
+        }
+
+        if(cstate) {
+            undo.push(cstate);
+            $("#undo").prop('disabled', false);
+            $('#undo').css("background-color", "#0275d8");
+        }
+        cstate = JSON.stringify(canvas.toJSON(['hasControls', 'hasBorders', 'perPixelTargetFind', 'targetFindTolerance', 'cellidx', 'cellint']));
+    }
+
+    function replay(playStack, saveStack, buttonsOn, buttonsOff) {
+        saveStack.push(cstate);
+        cstate = playStack.pop();
+        var on = $(buttonsOn);
+        var off = $(buttonsOff);
+        // turn both buttons off for the moment to prevent rapid clicking
+        on.prop('disabled', true);
+        on.css("background-color", "lightgray");
+
+        off.prop('disabled', true);
+        off.css("background-color", "lightgray");
+
+        $("#rmv").prop('disabled', true);
+        $("#rmv").css('background-color', 'lightgray');
+
+        canvas.clear();
+        canvas.loadFromJSON(cstate, function() {
+            canvas.renderAll();
+            showstatistics();
+            // now turn the buttons back on if applicable
+            on.prop('disabled', false);
+            on.css("background-color", "#0275d8");
+            if (playStack.length) {
+                off.prop('disabled', false);
+                off.css("background-color", "#0275d8");
+            }
+        });
+    }
+
+    function showimg() {
+
+        $("#gdetxt").css("display", "none");
+        $("#imgpreview").remove();
+        var tid = $('#newimgstid').val();
+        var imgfdpth = 'static/uploads/' + tid + '/';
+        var imgid = Object.keys(imgpool)[idx];
+        var imgpth = imgfdpth + imgpool[imgid];
+
+        if (canvas) {
+            canvas.clear();
+            canvas.renderAll();
+            undo = [];
+            cstate = null;
+            csave();
+        }
+
+        // a canvas overlayed on top of a background image
+        $("#gdetxt").after('<div id="imgpreview" style="height: inherit;"><div style="position: relative; display: inline-block;"><img id="currentimg" src="' + imgpth + '" alt="' + imgpool[imgid] + '" style="display:block; margin:0 auto; max-width:100%; max-height:420px;"><canvas id="imgcanvas" style="position: absolute; left: 0px; top: 0px; width: 100%; height: 100%; cursor: crosshair;"></canvas></div></div>');
+
+        $("#currentimg").load(function() {
+            canvas = new fabric.Canvas('imgcanvas', {defaultCursor:'crosshair', selection: false});
+            var ch = $("#currentimg")[0].getBoundingClientRect().height;
+            var cw = $("#currentimg")[0].getBoundingClientRect().width;
+            canvas.setHeight(ch);
+            canvas.setWidth(cw);
+            $('.canvas-container').css('position', 'absolute');
+            $('.canvas-container').css('top', '0');
+
+            $.getJSON("{{ url_for('getmarks') }}", 
+                {
+                    iid: imgid,
+                }, function(data) {
+                    if (data['success']) {
+                        var marks = $.parseJSON(data['marksjsonstring']);
+                        if (marks) {
+                            $.each(marks, function(i){
+                                var mark = marks[i];
+                                var colorcode = $(".cellbutton[data-v=" + mark.cellidx + "]").css('background-color');
+                                if (marks[i].type == 'circle') {
+                                    var cc = new fabric.Circle({
+                                        radius:4, fill:colorcode, left:mark.ox-4, top:mark.oy-4, hasControls:false, hasBorders:true,
+                                        // custom properties
+                                        cellidx: mark.cellidx,
+                                        cellint: mark.cellint,
+                                    });
+                                    canvas.add(cc);
+                                }
+                                if (marks[i].type == 'rect') {
+                                    var cc = new fabric.Rect({
+                                        left: mark.left,
+                                        top: mark.top,
+                                        originX: 'left',
+                                        originY: 'top',
+                                        width: mark.width,
+                                        height: mark.height,
+                                        angle: 0,
+                                        fill: 'rgba(255,0,0,0)',
+                                        selectable: true,
+                                        stroke: colorcode,
+                                        strokeWidth: 2,
+                                        hasBorders: true,
+                                        hasControls: false,
+                                        perPixelTargetFind: true,
+                                        targetFindTolerance: 20,
+                                            /*
+                                               hasRotatingPoint: false,
+                                               transparentCorners: true,
+                                               cornerColor: 'white',
+                                               cornerSize: 4,
+                                               lockRotation: true,
+                                               lockScalingX: true,
+                                               lockScalingY: true,
+                                             */
+                                            // custom properties
+                                        cellidx: mark.cellidx,
+                                        cellint: mark.cellint,
+                                    });
+                                    canvas.add(cc);
+                                }
+                            });
+                        }
+                        canvas.renderAll();
+                        showstatistics();
+                        undo = [];
+                        cstate = null;
+                        csave();
+
+                        if ($("#modeimage").attr('data-v') == '0') {
+                            // in preview mode
+                            canvasdie(canvas);
+                        }
+
+                        $('.cellbutton:not(.totalcellbtn)').prop('disabled', false);
+                        $("#intoptarea input").prop("disabled", false);
+                        if (!$("#checkmarks").is(':checked'))
+                            canvashide(canvas);
+                        $.notify("Image Loaded");
+                }
+            });
+
+            $('#undo').prop('disabled', true);
+            $('#undo').css("background-color", "lightgray");
+            $('#rmv').prop('disabled', true);
+            $('#rmv').css("background-color", "lightgray");
+
+            if ($("#modeimage").attr('data-v') == '1') {
+                // in edit mode
+                canvaslive(canvas);
+            } else {
+                // in preview mode
+                canvasdie(canvas);
+            }
+
+            $('.cellbutton:not(.totalcellbtn)').prop('disabled', false);
+            $("#intoptarea input").prop("disabled", false);
+            if (!$("#checkmarks").is(':checked'))
+                canvashide(canvas);
+
+        });
+
+        $('#prebtn').prop('disabled', false);
+        $('#nxtbtn').prop('disabled', false);
+        $('#svbtn').prop('disabled', false);
+        $('#modearea').css("visibility", "visible");
+    }
+
+    $("#checkmarks").on('change', function() {
+        if ($(this).is(':checked')) {
+            canvasshow(canvas);
+        } else {
+            canvashide(canvas);
+        }
+    });
+
+    $("#undo").on('click', function() {
+        replay(undo, redo, "#redo", this);
+    });
+
+    $("#redo").on('click', function() {
+        replay(redo, undo, "#undo", this);
+    });
+
+    $("#rmv").on('click', function() {
+        canvas.remove(canvas.getActiveObject());
+        csave();
+        showstatistics();
+    });
+
+    $("#nxtbtn").on('click', function(){
+        idx = (idx + 1) % Object.keys(imgpool).length;
+        showimg();
+    });
+
+    $("#prebtn").on('click', function(){
+        idx = (Object.keys(imgpool).length + idx - 1) % Object.keys(imgpool).length;
+        showimg();
+    });
+
+    $("#svbtn").on('click', function(){
+        var simplecvs = [];
+        canvas.forEachObject(function(o){
+            var smallo = {'type':o.type, 'cellidx':o.cellidx, 'cellint':o.cellint};
+            if(o.type == 'circle') {
+                smallo['ox']=o.left+o.radius;
+                smallo['oy']=o.top+o.radius;
+            };
+            if(o.type == 'rect') {
+                smallo['left']=o.left;
+                smallo['top']=o.top;
+                smallo['width']=o.width;
+                smallo['height']=o.height
+            };
+            simplecvs.push(smallo);
+        });
+
+        $.getJSON("{{ url_for('savemarks') }}", 
+            {
+                iid: Object.keys(imgpool)[idx],
+                marksjsonstring: JSON.stringify(simplecvs)
+            }, function(data){
+                if (data['success']) {
+                    $.notify("Marks Saved");
+            }
+        });
+    });
+
+    $('#resbtn').on('click', function() {
+        $.getJSON("{{ url_for('getresultsall') }}",
+        {
+        }, function(data) {
+            $("#resultstbl").html(data['injecthtml']);
+            $("#resultsModal").modal('show');
+        });
+    });
+
+    $("#modearea li")
+    .on('mouseenter', function() {
+        $(this).css("background-color", 'lightgray');
+    })
+    .on('mouseleave', function() {
+        $(this).css("background-color", 'white');
+    })
+    .on('click', function() {
+        if ($("#modearea li").index($(this))) {
+            $('#modeimage').attr("src", "static/iconimgs/edit.png");
+            $('#modeimage').attr("alt", "Edit Mode");
+            $('#modeimage').attr("data-v", "1");
+            $('#modeimage').css("height", "18px");
+            $('#previewcase').css("display", "none");
+            $('#editcase').css("display", "block");
+
+            $("#checkmarks").prop('checked', true).change();
+            canvaslive(canvas);
+
+            if(!cellidx) {
+                var colorcode = $(".cellbutton:first").css('background-color');
+                $(".cellbutton:first").css('outline', '4px ' + colorcode + ' solid ');
+                cellidx = $(".cellbutton:first").attr('data-v');
+                cellcolor = colorcode;
+            };
+
+            $("#checkboxintopt").css("display", "none");
+            $("#radiointopt").css("display", "block");
+            $("#radiointopt input:first").prop("checked", true);
+            cellint = '1';
+        } else {
+            $('#modeimage').attr("src", "static/iconimgs/preview.png");
+            $('#modeimage').attr("alt", "Preview Mode");
+            $('#modeimage').attr("data-v", "0");
+            $('#modeimage').css("height", "12px");
+            $('#editcase').css("display", "none");
+            $('#previewcase').css("display", "block");
+
+            canvasdie(canvas);
+            $('#rmv').prop('disabled', true);
+            $('#rmv').css("background-color", "lightgray");
+
+            $("#checkboxintopt").css("display", "block");
+            $("#checkboxintopt input").prop("checked", true);
+            $("#radiointopt").css("display", "none");
+        }
+    });
+
+    function canvashide(c) {
+        c.forEachObject(function(o){o.opacity = 0});
+        c.renderAll();
+
+        $('.cellbutton:not(.totalcellbtn)').prop('disabled', true);
+        $("#intoptarea input").prop("disabled", true);
+        stophighlight();
+    }
+
+    function canvasshow(c) {
+        c.forEachObject(function(o){o.opacity = 1});
+        c.renderAll();
+
+        $('.cellbutton:not(.totalcellbtn)').prop('disabled', false);
+        $("#intoptarea input").prop("disabled", false);
+    }
+
+    function canvasdie(c) {
+        c.deactivateAll();
+        c.forEachObject(function(o){o.selectable = false});
+        c.__eventListeners = [];
+        c.renderAll();
+
+        $("#markerswitch").bootstrapSwitch('disabled', true);
+    }
+
+    function canvaslive(c) {
+        c.forEachObject(function(o){o.selectable = true});
+
+        if ($("#markerswitch").bootstrapSwitch('state')) {
+            // for point marker
+            c.on({
+                'mouse:down': function(evt) {
+                    if (evt.target) {
+                        $("#rmv").prop('disabled', false);
+                        $("#rmv").css('background-color', '#0275d8');
+                    } else {
+                        var pos = canvas.getPointer(evt.e);
+                        var cc = new fabric.Circle({
+                            radius:4, fill:cellcolor, left:pos.x-4, top:pos.y-4, hasControls:false, hasBorders:true,
+                            // custom properties
+                            cellidx: cellidx,
+                            cellint: cellint,
+                        });
+                        canvas.add(cc);
+                        canvas.renderAll();
+                        showstatistics();
+                        csave();
+                    }
+                }
+            });
+        } else {
+            // for rectangle marker
+            c.on({
+                'mouse:down': function(o) {
+                    isDown = true;
+                    if (!o.target){
+                        var pointer = canvas.getPointer(o.e);
+                        origX = pointer.x;
+                        origY = pointer.y;
+                        rect = new fabric.Rect({
+                            left: origX,
+                            top: origY,
+                            originX: 'left',
+                            originY: 'top',
+                            width: pointer.x-origX,
+                            height: pointer.y-origY,
+                            angle: 0,
+                            fill: 'rgba(255,0,0,0)',
+                            selectable: true,
+                            stroke: cellcolor,
+                            strokeWidth: 2,
+                            hasBorders: true,
+                            hasControls: false,
+                            perPixelTargetFind: true,
+                            targetFindTolerance: 20,
+                            /*
+                               hasRotatingPoint: false,
+                               transparentCorners: true,
+                               cornerColor: 'white',
+                               cornerSize: 4,
+                               lockRotation: true,
+                               lockScalingX: true,
+                               lockScalingY: true,
+                             */
+                            // custom properties
+                            cellidx: cellidx,
+                            cellint: cellint,
+                        });
+                    } else {
+                        $("#rmv").prop('disabled', false);
+                        $("#rmv").css('background-color', '#0275d8');
+                    }
+                },
+
+                'mouse:move': function(o) {
+                    if (!isDown) return;
+                    var selObj = canvas.getActiveObject();
+                    if (!selObj){
+                        var pointer = canvas.getPointer(o.e);
+
+                        if(origX>pointer.x){
+                            rect.set({ left: Math.abs(pointer.x) });
+                        }
+                        if(origY>pointer.y){
+                            rect.set({ top: Math.abs(pointer.y) });
+                        }
+
+                        rect.set({ width: Math.abs(origX - pointer.x) });
+                        rect.set({ height: Math.abs(origY - pointer.y) });
+
+                        canvas.renderAll();
+                        canvas.contextContainer.strokeStyle = cellcolor;
+                        canvas.contextContainer.strokeRect(rect.left + 1, rect.top + 1, rect.width, rect.height); // stroke offset is half stroke width
+                    } else {
+                        if (selObj.type == "rect")
+                            selObj.fill = 'rgba(255,255,255,0.4)';
+                    }
+                },
+
+                'mouse:up': function(o) {
+                    if (!isDown) return;
+                    var pointer = canvas.getPointer(o.e);
+
+                    var selObj = canvas.getActiveObject();
+                    if (!selObj) {
+                        if(origX != pointer.x && origY != pointer.y) {
+                            canvas.add(rect);
+                            csave();
+                            showstatistics();
+                        }
+                        $('#rmv').prop('disabled', true);
+                        $('#rmv').css("background-color", "lightgray");
+                    } else {
+                        /*
+                        if (selObj.type == "rect")
+                            selObj.fill = 'rgba(255,0,0,0)';
+                        */
+                    }
+                    canvas.renderAll();
+
+                    isDown = false;
+                },
+            });
+        }
+
+        c.on({
+            'object:modified': function() { // after 'modified' event, 'mouseup' fired
+                var selObj = canvas.getActiveObject();
+                if (selObj.type == "rect")
+                    selObj.fill = 'rgba(255,0,0,0)';
+                csave();
+            }
+        });
+
+        $("#markerswitch").bootstrapSwitch('disabled', false);
+    }
+
+    $("#markerswitch").on('switchChange.bootstrapSwitch', function() {
+        canvas.__eventListeners = [];
+        canvaslive(canvas);
+    });
+
+    $(".cellbutton").on('click', function(evt) {
+        event.stopPropagation();
+        $(".cellbutton").css('outline', '0');
+        var colorcode = $(this).css('background-color');
+        $(this).css('outline', '4px ' + colorcode + ' solid ');
+        cellidx = $(this).attr('data-v');
+        cellcolor = colorcode;
+        if ($("#modeimage").attr('data-v') == '0')
+            highlight();
+    });
+
+    $("input[name=cintensity]").on('click', function() {
+        cellint = $(this).val();
+    });
+
+    $('#checkboxintopt input').on('change', function() {
+        if(!$('#checkboxintopt input:checked').length)
+            $(this).prop('checked', true);
+    });
+
+    function animate(o, dir, count) {
+        if (o.type == "circle") {
+            fabric.util.animate({
+                startValue: o.radius,
+                endValue: o.radius * (dir ? 2 : 0.5),
+                duration: 200,
+                easing: fabric.util.ease.easeOutCubic,
+                onChange: function(value) {
+                    o.radius = value;
+                    canvas.renderAll();
+                },
+                onComplete: function() {
+                    o.setCoords();
+                    count++;
+                    if (count < 4)
+                        animate(o, 1-dir, count);
+                    else
+                        fini++;
+                }
+            });
+        } else {
+            fabric.util.animate({
+                startValue: o.strokeWidth,
+                endValue: o.strokeWidth * (dir ? 2 : 0.5),
+                duration: 200,
+                easing: fabric.util.ease.easeOutCubic,
+                onChange: function(value) {
+                    o.strokeWidth = value;
+                    canvas.renderAll();
+                },
+                onComplete: function() {
+                    o.setCoords();
+                    count++;
+                    if (count < 4)
+                        animate(o, 1-dir, count);
+                    else
+                        fini++;
+                }
+            });
+        }
+    }
+
+    function highlight() {
+        var checkedintv = [];
+        $('#checkboxintopt input:checked').each(function(){checkedintv.push($(this).val())});
+
+        if (fini == tot) {
+            tot = canvas.getObjects().length;
+            fini = 0;
+            canvas.forEachObject(function(o){
+                if (o.cellidx == cellidx && $.inArray(o.cellint, checkedintv) != -1) {
+                    animate(o, 1, 0);
+                } else {
+                    fini++;
+                }
+            });
+        }
+    }
+
+    function stophighlight() {
+        $(".cellbutton").css('outline', '0');
+        cellidx = 0;
+        cellint = 0;
+        cellcolor = "green";
+    }
+
+    function showstatistics() {
+        var statnum = [];
+        var numcell = $('.cellbutton').length - 1;
+
+        for (var i = 0; i < numcell; i++)
+            statnum[i] = 0;
+
+        canvas.forEachObject(function(o){
+            statnum[o.cellidx-1] += 1;
+        });
+
+        for (var i = 1; i <= numcell; i++) {
+            var rowidx = $('.cellbutton').index($('.cellbutton[data-v=' + i + ']'));
+            $('.statdiv:eq(' + rowidx + ')').html(statnum[i-1]);
+            if (statnum[i-1] == 0)
+                $('.statdiv:eq(' + rowidx + ')').css('color', 'lightgray');
+            else
+                $('.statdiv:eq(' + rowidx + ')').css('color', 'black');
+        }
+        $('.statdiv:last').html(canvas.getObjects().length);
+        if (canvas.getObjects().length == 0)
+            $('.statdiv:last').css('color', 'lightgray');
+        else
+            $('.statdiv:last').css('color', 'black');
+    }
+});
+
+</script>
+
+{% endblock %}
+
+
+{% block content %}
+<div id="select-dropdown" class="closed">
+    <div id="select-default" class="select default">Select A Task</div>
+    {% for task in tasklist %}
+    <div class="select option" data-id={{ task.tid }}>{{ task.tname }}</div>
+    {% endfor %}
+    <div id="select-new" class="select option"><img src="static/iconimgs/newtask.png" alt="New Task" style="max-height:60%"></div>
+</div>
+
+<!-- New Task Modal -->
+<div id="newtaskModal" class="modal fade" role="dialog">
+    <div class="modal-dialog modal-sm">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">New Task</h4>
+            </div>
+            <div class="modal-body" style="overflow:hidden;">
+                <form id="newtaskform" enctype="multipart/form-data">
+                    <input type="text" name="tname" id="newtname" placeholder="give new task a name" required/>
+                    <button type="submit" class="btn btn-primary" style="margin-top:20px; width:100px; float:right;">OK</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+<!-- Upload Images Modal -->
+<div id="uploadImgsModal" class="modal fade" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Upload Images</h4>
+            </div>
+            <div class="modal-body" style="overflow:hidden;">
+                <form id="uploadimgsform" enctype="multipart/form-data">
+                    <input type="hidden" name="tid" id="newimgstid"/>
+                    <div class="fileUpload btn btn-default">
+                        <span>Choose</span>
+                        <input type="file" id="newimgs" name="newimgs" class="upload" multiple/>
+                    </div>
+                    <input type="text" id="newimgnames" name="newimgnames" placeholder="Choose Images" disabled="disabled" />
+                    <div class="progress" id="newimgprogbar" style="display:none;">
+                        <div class="progress-bar progress-bar-success progress-bar-striped active" role="progressbar" aria-valuenow="0" aria-valuemin="0" aria-valuemax="100" style="width:0%">
+                            0.0%
+                        </div>
+                    </div>
+                    <button type="submit" class="btn btn-primary" style="margin-top:20px; width:100px; float:right;">OK</button>
+                </form>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<!-- Results Modal -->
+<div id="resultsModal" class="modal fade" role="dialog">
+    <div class="modal-dialog">
+        <div class="modal-content">
+            <div class="modal-header" style="border-bottom: 1px solid #e5e5e5;">
+                <button type="button" class="close" data-dismiss="modal">&times;</button>
+                <h4 class="modal-title">Results</h4>
+            </div>
+            <div class="modal-body" style="overflow:hidden;">
+                <div id="resultstbl"></div>
+            </div>
+            <div class="modal-footer" style="border-top: 1px solid #e5e5e5;">
+                <button type="button" class="btn btn-default" data-dismiss="modal">Close</button>
+            </div>
+        </div>
+    </div>
+</div>
+
+
+<div class="taskmarking">
+
+    <div id="modearea" style="visibility:hidden; margin-top:40px; padding: 0;">
+        <div class="btn-group">
+            <button type="button" class="btn btn-sm" style="height:30px;">Mode</button>
+            <button type="button" class="btn btn-info btn-sm dropdown-toggle" data-toggle="dropdown" aria-haspopup="true" aria-expanded="false" style="height:30px;">
+                <img id="modeimage" data-v="0" src="static/iconimgs/preview.png" alt="Preview Mode" style="height:12px; margin-right: 5px;">
+                <span class="caret"></span>
+            </button>
+            <ul class="dropdown-menu">
+                <li><img src="static/iconimgs/preview.png" alt="Preview" style="height:12px; margin: 0 10px 0 20px;"><span style="vertical-align: middle;">Preview</span></li>
+                <li><img src="static/iconimgs/edit.png" alt="Edit" style="height:18px; margin: 0 10px 0 20px;"><span style="vertical-align: middle;">Edit</span></li>
+            </ul>
+        </div>
+
+        <div id="previewcase" style="margin-top: 80px; margin-left:20px; text-align: left;">
+            <div class="checkbox checkbox-success">
+                <input type="checkbox" id="checkraw" checked disabled>
+                <label for="checkraw">
+                    Raw Image
+                </label>
+            </div>
+
+            <div class="checkbox checkbox-success">
+                <input type="checkbox" id="checkmarks">
+                <label for="checkmarks" style="opacity: 0.65;">
+                    Marks
+                </label>
+            </div>
+        </div>
+
+        <div id="editcase" style="margin-top: 80px; margin-left:10px; text-align: center; display: none;">
+            <div style="margin-bottom: 20px;">
+                <input id="markerswitch" data-size="small" data-on-text="<span class='glyphicon glyphicon-record'></span>" data-on-color="info" data-off-text="<span class='glyphicon glyphicon-unchecked'></span>" data-off-color="info" data-label-text="<span class='glyphicon glyphicon-pencil'></span>" type="checkbox" checked>
+            </div>
+
+            <button id="undo" class="edittoolbtn" disabled>Undo</button>
+            <button id="redo" class="edittoolbtn" disabled>Redo</button>
+            <button id="rmv" class="edittoolbtn" disabled>Remove</button>
+        </div>
+
+    </div>
+
+    <div id="imgarea">
+        <div style="margin-bottom:18px; font-size: 14px;">
+            Image
+        </div>
+
+        <div style="width:100%; height: 420px; display: table;" id="imgframe"><span id="gdetxt" style="display: table-cell; vertical-align: middle; font-size: 24px; color: #8080ff">Select / Create a Task First</span></div>
+
+        <div id="toolarea">
+            <div style="width:33%">
+                <button id="prebtn" class="toolbutton" disabled>Prev Image</button> 
+                <button id="upldbtn" class="toolbutton" disabled>Upload Images</button>
+            </div>
+            <div style="width:34%">
+                <button id="svbtn" class="toolbutton savetoolbtn" disabled>Save</button> 
+                <button id="resbtn" class="toolbutton">Results</button> 
+            </div>
+            <div style="width:33%">
+                <button id="nxtbtn" class="toolbutton" disabled>Next Image</button> 
+                <button id="logoutbtn" class="toolbutton">Logout</button> 
+            </div>
+        </div>
+
+    </div>
+    <div id="cellarea">
+        <div style="margin-bottom:18px; font-size: 14px;">
+            Blood Cell Type
+        </div>
+        {% for celltype in celltypes %}
+        <button class="cellbutton" data-v="{{ celltype.ctid }}" style="background-color: {{ celltype.ctcolor }}" disabled>{{ celltype.ctname }}</button> 
+        {% endfor %}
+        <button class="cellbutton totalcellbtn" disabled>Total</button> 
+
+        <div id="intoptarea" style="margin-top: 10px;">
+            <div style="margin-bottom:18px; font-size: 14px;">
+                Fluorescence Intensity
+            </div>
+
+            <div id="radiointopt" style="display: none;">
+                <div>
+                    <div class="radio radio-info radio-inline intensityopt">
+                        <input type="radio" id="radioint1" name="cintensity" value="1" checked>
+                        <label for="radioint1">
+                            1+
+                        </label>
+                    </div>
+                    <div class="radio radio-info radio-inline intensityopt">
+                        <input type="radio" id="radioint2" name="cintensity" value="2">
+                        <label for="radioint2">
+                            2+
+                        </label>
+                    </div>
+                </div>
+
+                <div>
+                    <div class="radio radio-info radio-inline intensityopt">
+                        <input type="radio" id="radioint3" name="cintensity" value="3">
+                        <label for="radioint3">
+                            3+
+                        </label>
+                    </div>
+                    <div class="radio radio-info radio-inline intensityopt">
+                        <input type="radio" id="radioint4" name="cintensity" value="4">
+                        <label for="radioint4">
+                            4+
+                        </label>
+                    </div>
+                </div>
+            </div>
+
+            <div id="checkboxintopt">
+                <div>
+                    <div class="checkbox checkbox-info checkbox-inline intensityopt">
+                        <input type="checkbox" id="checkboxint1" value="1" checked disabled>
+                        <label for="checkboxint1">
+                            1+
+                        </label>
+                    </div>
+                    <div class="checkbox checkbox-info checkbox-inline intensityopt">
+                        <input type="checkbox" id="checkboxint1" value="2" checked disabled>
+                        <label for="checkboxint2">
+                            2+
+                        </label>
+                    </div>
+                </div>
+
+
+                <div>
+                    <div class="checkbox checkbox-info checkbox-inline intensityopt">
+                        <input type="checkbox" id="checkboxint3" value="3" checked disabled>
+                        <label for="checkboxint3">
+                            3+
+                        </label>
+                    </div>
+                    <div class="checkbox checkbox-info checkbox-inline intensityopt">
+                        <input type="checkbox" id="checkboxint4" value="4" checked disabled>
+                        <label for="checkboxint4">
+                            4+
+                        </label>
+                    </div>
+                </div>
+            </div>
+        </div>
+    </div>
+
+    <div id="statarea">
+        <div style="margin-bottom:18px; font-size: 14px;">
+            Statistics
+        </div>
+
+        <div>
+            {% for celltype in celltypes %}
+            <div class="statdiv">
+                0
+            </div>
+            {% endfor %}
+            <div class="statdiv">
+                0
+            </div>
+        </div>
+    </div>
+</div>
+{% endblock %}

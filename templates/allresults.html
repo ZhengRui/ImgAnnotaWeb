@@ -1,0 +1,66 @@
+<div class="bootstrap-table">
+    <div class="fixed-table-toolbar"></div>
+    <div class="fixed-table-container" style="padding-bottom: 0px;">
+        <div class="fixed-table-header" style="display: none;">
+            <table></table>
+        </div>
+        <div class="fixed-table-body">
+            <div class="fixed-table-loading" style="top: 1px;">Loading, please wait...</div>
+            <table class="table table-hover">
+                <thead>
+                    <tr>
+                        <th style="" data-field="tname" tabindex="0">
+                            <div class="th-inner ">Task</div>
+                            <div class="fht-cell"></div>
+                        </th>
+                        <th style="text-align: center;" data-field="imgnum" tabindex="0">
+                            <div class="th-inner ">Number of Images</div>
+                            <div class="fht-cell"></div>
+                        </th>
+                        <th style="" data-field="state" tabindex="0">
+                            <div class="th-inner ">Status</div>
+                            <div class="fht-cell"></div>
+                        </th>
+                        <th style="text-align: center;" data-field="details" tabindex="0">
+                            <div class="th-inner ">Details</div>
+                            <div class="fht-cell"></div>
+                        </th>
+                    </tr>
+                </thead>
+                <tbody>
+                    {% for task in tasklist %}
+                    {% if not task.state %}
+                    <tr style="background-color: rgba(255,0,0,0.05);">
+                    {% else %}
+                    <tr style="background-color: rgba(0,255,0,0.05);">
+                    {% endif %}
+                        <td style="">{{ task.tname }}</td>
+                        <td style="font-family: fantasy; font-size: medium; font-weight: bolder; text-align: center;">{{ task.imgnummrk }} / {{ task.imgnumttl }}</td>
+                        {% if task.state %}
+                        <td style="">Completed</td>
+                        {% else %}
+                        <td style="">Incompleted</td>
+                        {% endif %}
+                        {% if not task.imgnummrk %}
+                        <td style="" disabled></td>
+                        {% else %}
+                        <td style="text-align: center;">
+                            <button type="submit" class="btn btn-info btn-xs taskdetailbtn" style="width:80px;"><a href="/getresultdetail/{{ task.tid }}">Download</a></button>
+                        </td>
+                        {% endif %}
+                    </tr>
+                    {% endfor %}
+                </tbody>
+            </table>
+        </div>
+        <div class="fixed-table-footer" style="display: none;">
+            <table>
+                <tbody>
+                    <tr></tr>
+                </tbody>
+            </table>
+        </div>
+        <div class="fixed-table-pagination" style="display: none;">
+        </div>
+    </div>
+</div>

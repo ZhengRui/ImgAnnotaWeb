@@ -1,0 +1,4 @@
+venv/
+static/uploads/
+*.pyc
+*.html

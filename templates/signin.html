@@ -1,0 +1,37 @@
+{% extends "base.html" %}
+
+{% block jscript %}
+<script type="text/javascript">
+    $(document).ready(function() {
+    });
+</script>
+{% endblock %}
+
+{% block title %}Signin{% endblock %}
+
+{% block content %}
+
+    {% for message in form.email.errors %}
+        <div class="flash">{{ message }}</div>
+    {% endfor %}
+
+    {% for message in form.password.errors %}
+        <div class="flash">{{ message }}</div>
+    {% endfor %}
+
+    <form action="{{ url_for('signin') }}" method=post class="wtform">
+        {{ form.hidden_tag() }}
+
+        {{ form.email.label }}
+        {{ form.email }}
+
+        {{ form.password.label }}
+        {{ form.password }}
+
+        <div style="width:400px;">
+        {{ form.submit }}
+        <a href="signup" id="signuplnk">Not a User ?</a>
+        </div>
+    </form>
+
+{% endblock %}
