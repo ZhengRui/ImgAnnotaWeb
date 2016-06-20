@@ -1,3 +1,5 @@
+Look at how to use through this [video](https://youtu.be/YVcQHeDmhoU).
+
 ### Code
 
 + Framework: [Flask (python)](http://flask.pocoo.org/), Image Editing Library: [Fabric.js (javascript + Canvas)](http://fabricjs.com/)
